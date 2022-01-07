@@ -1,0 +1,5 @@
+[tool.black]
+line-length = 79
+
+[tool.flake8]
+# config in .flake8 as flake8 doesn't yet support pyproject.toml
