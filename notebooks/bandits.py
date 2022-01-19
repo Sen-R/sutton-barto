@@ -1,4 +1,4 @@
-from typing import Dict, Callable, Any, Sequence, Optional, List, Union
+from typing import Dict, Callable, Any, List, Union
 import os
 from pathlib import Path
 import pickle
@@ -7,11 +7,9 @@ import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
 from tqdm.notebook import tqdm  # type: ignore
-from rl.custom_types import LearningRateSchedule
 from rl import Agent
 from rl.simulator import SingleAgentWaitingSimulator
-from rl.environments.bandit import random_bandit
-from rl.agents import EpsilonGreedyRewardAveragingAgent
+from rl.environments.bandit import MultiArmedBandit
 from rl.callbacks import History, AgentStateLogger, EnvironmentStateLogger
 
 
@@ -145,6 +143,7 @@ class BanditResults:
 
 def bandit_experiment(
     agent_builders: Dict[str, Callable[[], Agent]],
+    bandit_builder: Callable[[], MultiArmedBandit],
     test_bed_size: int,
     n_steps: int,
     *,
@@ -158,6 +157,8 @@ def bandit_experiment(
     Args:
       agent_builders: a dict with agent names as keys and callables
         that build the corresponding agents as values
+      bandit_builder: a callable that creates a fresh bandit environment to
+        the specifications required for the current experiment
       test_bed_size: number of random bandits to generate
       n_steps: length of simulations
       random_state: `None`, random seed or random number generator
@@ -165,16 +166,9 @@ def bandit_experiment(
     Returns:
       `BanditResults` object containing results
     """
-    n_levers = 10
-    bandit_mean_params, bandit_sigma_params = (0.0, 1.0), (1.0, 0.0)
     results = []
     for bandit_id in tqdm(range(test_bed_size)):
-        bandit = random_bandit(
-            n_levers,
-            mean_params=bandit_mean_params,
-            sigma_params=bandit_sigma_params,
-            random_state=random_state,
-        )
+        bandit = bandit_builder()
         for agent_name, agent_builder in agent_builders.items():
             agent = agent_builder()
             history = History(logging_period)
@@ -226,25 +220,3 @@ def bandit_experiment(
                 }
             )
     return BanditResults(results, logging_period=logging_period)
-
-
-def get_epsilon_greedy_bandit_agent_builder(
-    epsilon: float,
-    n_actions: int,
-    *,
-    initial_action_values: Optional[Sequence[float]] = None,
-    learning_rate_schedule: Optional[LearningRateSchedule] = None,
-    random_state=None,
-) -> Callable[[], Agent]:
-    """Returns a callable that builds (when called) the specified agent."""
-
-    def agent_builder() -> Agent:
-        return EpsilonGreedyRewardAveragingAgent(
-            epsilon,
-            n_actions,
-            initial_action_values=initial_action_values,
-            learning_rate_schedule=learning_rate_schedule,
-            random_state=random_state,
-        )
-
-    return agent_builder
