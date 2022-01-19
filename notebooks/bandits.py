@@ -12,7 +12,7 @@ from rl import Agent
 from rl.simulator import SingleAgentWaitingSimulator
 from rl.environments.bandit import random_bandit
 from rl.agents import EpsilonGreedyRewardAveragingAgent
-from rl.callbacks import History, AgentStateLogger
+from rl.callbacks import History, AgentStateLogger, EnvironmentStateLogger
 
 
 class BanditResults:
@@ -22,28 +22,38 @@ class BanditResults:
     and visualising results, as well as for loading and saving them.
     """
 
-    def __init__(self, results: List[Dict[str, Any]]):
+    def __init__(self, results: List[Dict[str, Any]], logging_period: int = 1):
         self._results = results
+        self.logging_period = logging_period
 
     @property
-    def results(self) -> List[Dict[str, Any]]:
+    def raw(self) -> List[Dict[str, Any]]:
         return self._results
 
     def save(self, file_path: Union[str, os.PathLike]):
         save_path = Path(file_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
         with open(save_path, "wb") as f:
-            pickle.dump(self._results, f)
+            pickle.dump(
+                {
+                    "results": self.raw,
+                    "logging_period": self.logging_period,
+                },
+                f,
+            )
 
     @classmethod
     def load(cls, file_path: Union[str, bytes, os.PathLike]):
         with open(file_path, "rb") as f:
-            return cls(pickle.load(f))
+            return cls(**pickle.load(f))
 
     @property
     def average_optimal_action_value(self):
         """Mean optimal action value over the test bed."""
-        return np.mean([r["ranked_action_values"][0] for r in self.results])
+        optimal_action_values = np.stack(
+            [r["optimal_action_values"] for r in self.results]
+        )
+        return np.mean(optimal_action_values, axis=0)
 
     def summary(self) -> pd.DataFrame:
         """Summarises results and returns as a DataFrame.
@@ -59,24 +69,35 @@ class BanditResults:
           the optimal action.
         """
         return (
-            pd.DataFrame(self.results)
+            pd.DataFrame(self.raw)
             .groupby(["agent"])
             .agg(
                 {
                     "rewards": "mean",
                     "actions_taken_optimal": "mean",
                     "greedy_actions_optimal": "mean",
+                    "optimal_action_values": "mean",
                 }
             )
             .explode(
-                ["rewards", "actions_taken_optimal", "greedy_actions_optimal"]
+                [
+                    "rewards",
+                    "actions_taken_optimal",
+                    "greedy_actions_optimal",
+                    "optimal_action_values",
+                ]
             )
-            .assign(t=lambda df: df.groupby(df.index).cumcount())
+            .assign(
+                t=lambda df: (
+                    self.logging_period * (1 + df.groupby(df.index).cumcount())
+                )
+            )
             .rename(
                 {
                     "rewards": "mean_reward",
                     "actions_taken_optimal": "prob_action_taken_optimal",
                     "greedy_actions_optimal": "prob_greedy_action_optimal",
+                    "optimal_action_values": "mean_optimal_action_value",
                 },
                 axis=1,
             )
@@ -90,11 +111,11 @@ class BanditResults:
         f, axs = plt.subplots(1, 3, figsize=(18, 4))
         plt.sca(axs[0])
         sns.lineplot(data=results_summary, x="t", y="mean_reward", hue="agent")
-        plt.axhline(
-            y=self.average_optimal_action_value,
+        plt.plot(
+            results_summary["t"],
+            results_summary["mean_optimal_action_value"],
+            c="C3", alpha=0.3,
             label="optimal",
-            c="C3",
-            ls=":",
         )
         plt.ylabel("Average reward")
         plt.legend()
@@ -105,7 +126,7 @@ class BanditResults:
             y="prob_action_taken_optimal",
             hue="agent",
         )
-        plt.axhline(y=1.0, label="optimal", c="C3", ls=":")
+        plt.axhline(y=1.0, label="optimal", c="C3", alpha=0.3)
         plt.ylabel("% Optimal action taken")
         plt.legend()
         plt.sca(axs[2])
@@ -115,7 +136,7 @@ class BanditResults:
             y="prob_greedy_action_optimal",
             hue="agent",
         )
-        plt.axhline(y=1.0, label="optimal", c="C3", ls=":")
+        plt.axhline(y=1.0, label="optimal", c="C3", alpha=0.3)
         plt.ylabel("% Optimal action identified")
         plt.legend()
         plt.show()
@@ -125,6 +146,8 @@ def bandit_experiment(
     agent_builders: Dict[str, Callable[[], Agent]],
     test_bed_size: int,
     n_steps: int,
+    *,
+    logging_period: int = 1,
     random_state=None,
 ) -> BanditResults:
     """Bandit learning curves experiment.
@@ -151,39 +174,48 @@ def bandit_experiment(
             sigma_params=bandit_sigma_params,
             random_state=random_state,
         )
-        actions_ordered_by_value_desc = np.argsort(bandit.means)[::-1]
-        action_ranks = np.argsort(actions_ordered_by_value_desc)
         for agent_name, agent_builder in agent_builders.items():
             agent = agent_builder()
-            history, agent_state_log = History(), AgentStateLogger()
-            callbacks = [history, agent_state_log]
+            history = History(logging_period)
+            agent_state_log = AgentStateLogger(logging_period)
+            bandit_state_log = EnvironmentStateLogger(logging_period)
+            callbacks = [history, agent_state_log, bandit_state_log]
             sim = SingleAgentWaitingSimulator(
                 bandit, agent, callbacks=callbacks
             )
             sim.run(n_steps)
-            actions_taken_ranks = action_ranks[history.actions]
-            greedy_actions_ranks = action_ranks[
+            action_value_matrix = np.stack(
+                [s["means"] for s in bandit_state_log.states]
+            )
+            optimal_actions = np.argmax(action_value_matrix, axis=-1)
+            optimal_action_values = np.squeeze(
+                np.take_along_axis(
+                    action_value_matrix,
+                    optimal_actions[:, np.newaxis],
+                    axis=-1
+                )
+            )
+            actions = np.array(history.actions)
+            greedy_actions = np.array(
                 [np.argmax(s["Q"]) for s in agent_state_log.states]
-            ]
+            )
             results.append(
                 {
                     "bandit_id": bandit_id,
                     "agent": agent_name,
-                    "ranked_action_values": bandit.means[
-                        actions_ordered_by_value_desc
-                    ],
-                    "action_ranks": actions_taken_ranks,
+                    "optimal_action_values": optimal_action_values,
+                    "actions": actions,
                     "actions_taken_optimal": (
-                        (actions_taken_ranks == 0).astype(np.float_)
+                        (actions == optimal_actions).astype(np.float_)
                     ),
-                    "greedy_actions": greedy_actions_ranks,
+                    "greedy_actions": greedy_actions,
                     "greedy_actions_optimal": (
-                        (greedy_actions_ranks == 0).astype(np.float_)
+                        (greedy_actions == optimal_actions).astype(np.float_)
                     ),
                     "rewards": np.array(history.rewards),
                 }
             )
-    return BanditResults(results)
+    return BanditResults(results, logging_period=logging_period)
 
 
 def get_epsilon_greedy_bandit_agent_builder(
