@@ -109,9 +109,7 @@ class BanditResults:
         f, axs = plt.subplots(1, 3, figsize=(18, 4))
         plt.sca(axs[0])
         sns.lineplot(data=results_summary, x="t", y="mean_reward", hue="agent")
-        plt.plot(
-            results_summary["t"],
-            results_summary["mean_optimal_action_value"],
+        results_summary.groupby("t")["mean_optimal_action_value"].mean().plot(
             c="C3",
             alpha=0.3,
             label="optimal",
@@ -168,8 +166,8 @@ def bandit_experiment(
     """
     results = []
     for bandit_id in tqdm(range(test_bed_size)):
-        bandit = bandit_builder()
         for agent_name, agent_builder in agent_builders.items():
+            bandit = bandit_builder()
             agent = agent_builder()
             history = History(logging_period)
             agent_state_log = AgentStateLogger(logging_period)
