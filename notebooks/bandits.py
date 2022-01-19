@@ -6,12 +6,13 @@ import numpy as np
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
+from tqdm.notebook import tqdm  # type: ignore
 from rl.custom_types import LearningRateSchedule
 from rl import Agent
 from rl.simulator import SingleAgentWaitingSimulator
 from rl.environments.bandit import random_bandit
 from rl.agents import EpsilonGreedyRewardAveragingAgent
-from rl.callbacks import AgentStateLogger
+from rl.callbacks import History, AgentStateLogger
 
 
 class BanditResults:
@@ -143,7 +144,7 @@ def bandit_experiment(
     n_levers = 10
     bandit_mean_params, bandit_sigma_params = (0.0, 1.0), (1.0, 0.0)
     results = []
-    for bandit_id in range(test_bed_size):
+    for bandit_id in tqdm(range(test_bed_size)):
         bandit = random_bandit(
             n_levers,
             mean_params=bandit_mean_params,
@@ -154,14 +155,15 @@ def bandit_experiment(
         action_ranks = np.argsort(actions_ordered_by_value_desc)
         for agent_name, agent_builder in agent_builders.items():
             agent = agent_builder()
-            callbacks = [AgentStateLogger()]
+            history, agent_state_log = History(), AgentStateLogger()
+            callbacks = [history, agent_state_log]
             sim = SingleAgentWaitingSimulator(
                 bandit, agent, callbacks=callbacks
             )
             sim.run(n_steps)
-            actions_taken_ranks = action_ranks[sim.history.actions]
+            actions_taken_ranks = action_ranks[history.actions]
             greedy_actions_ranks = action_ranks[
-                [np.argmax(s["Q"]) for s in callbacks[0].states]
+                [np.argmax(s["Q"]) for s in agent_state_log.states]
             ]
             results.append(
                 {
@@ -178,7 +180,7 @@ def bandit_experiment(
                     "greedy_actions_optimal": (
                         (greedy_actions_ranks == 0).astype(np.float_)
                     ),
-                    "rewards": np.array(sim.history.rewards),
+                    "rewards": np.array(history.rewards),
                 }
             )
     return BanditResults(results)
