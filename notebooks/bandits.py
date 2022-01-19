@@ -114,7 +114,8 @@ class BanditResults:
         plt.plot(
             results_summary["t"],
             results_summary["mean_optimal_action_value"],
-            c="C3", alpha=0.3,
+            c="C3",
+            alpha=0.3,
             label="optimal",
         )
         plt.ylabel("Average reward")
@@ -184,20 +185,25 @@ def bandit_experiment(
                 bandit, agent, callbacks=callbacks
             )
             sim.run(n_steps)
+            actions = np.array(history.actions)
             action_value_matrix = np.stack(
                 [s["means"] for s in bandit_state_log.states]
             )
-            optimal_actions = np.argmax(action_value_matrix, axis=-1)
-            optimal_action_values = np.squeeze(
+            optimal_action_values = np.max(action_value_matrix, axis=-1)
+            taken_action_values = np.squeeze(
                 np.take_along_axis(
-                    action_value_matrix,
-                    optimal_actions[:, np.newaxis],
-                    axis=-1
+                    action_value_matrix, actions[:, np.newaxis], axis=-1
                 )
             )
-            actions = np.array(history.actions)
             greedy_actions = np.array(
                 [np.argmax(s["Q"]) for s in agent_state_log.states]
+            )
+            greedy_action_values = np.squeeze(
+                np.take_along_axis(
+                    action_value_matrix,
+                    greedy_actions[:, np.newaxis],
+                    axis=-1,
+                )
             )
             results.append(
                 {
@@ -206,11 +212,15 @@ def bandit_experiment(
                     "optimal_action_values": optimal_action_values,
                     "actions": actions,
                     "actions_taken_optimal": (
-                        (actions == optimal_actions).astype(np.float_)
+                        (taken_action_values == optimal_action_values).astype(
+                            np.float_
+                        )
                     ),
                     "greedy_actions": greedy_actions,
                     "greedy_actions_optimal": (
-                        (greedy_actions == optimal_actions).astype(np.float_)
+                        (greedy_action_values == optimal_action_values).astype(
+                            np.float_
+                        )
                     ),
                     "rewards": np.array(history.rewards),
                 }
