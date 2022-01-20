@@ -6,6 +6,7 @@ from itertools import product
 import numpy as np
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
+from matplotlib.ticker import PercentFormatter  # type: ignore
 import seaborn as sns  # type: ignore
 from joblib import Parallel, delayed  # type: ignore
 from rl import Agent
@@ -126,6 +127,7 @@ class BanditResults:
         )
         plt.axhline(y=1.0, label="optimal", c="C3", alpha=0.3)
         plt.ylabel("% Optimal action taken")
+        plt.gca().yaxis.set_major_formatter(PercentFormatter(1.0))
         plt.legend()
         plt.sca(axs[2])
         sns.lineplot(
@@ -136,6 +138,7 @@ class BanditResults:
         )
         plt.axhline(y=1.0, label="optimal", c="C3", alpha=0.3)
         plt.ylabel("% Optimal action identified")
+        plt.gca().yaxis.set_major_formatter(PercentFormatter(1.0))
         plt.legend()
         plt.show()
 
