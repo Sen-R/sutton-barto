@@ -1,12 +1,13 @@
-from typing import Dict, Callable, Any, List, Union
+from typing import Dict, Callable, Any, List, Union, Optional
 import os
 from pathlib import Path
 import pickle
+from itertools import product
 import numpy as np
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
-from tqdm.notebook import tqdm  # type: ignore
+from joblib import Parallel, delayed  # type: ignore
 from rl import Agent
 from rl.simulator import SingleAgentWaitingSimulator
 from rl.environments.bandit import MultiArmedBandit
@@ -140,13 +141,15 @@ class BanditResults:
 
 
 def bandit_experiment(
-    agent_builders: Dict[str, Callable[[], Agent]],
-    bandit_builder: Callable[[], MultiArmedBandit],
+    agent_builders: Dict[str, Callable[..., Agent]],
+    bandit_builder: Callable[..., MultiArmedBandit],
     test_bed_size: int,
     n_steps: int,
     *,
     logging_period: int = 1,
-    random_state=None,
+    entropy: Optional[int] = None,
+    n_jobs: Optional[int] = None,
+    verbose: int = 0,
 ) -> BanditResults:
     """Bandit learning curves experiment.
 
@@ -164,57 +167,79 @@ def bandit_experiment(
     Returns:
       `BanditResults` object containing results
     """
-    results = []
-    for bandit_id in tqdm(range(test_bed_size)):
-        for agent_name, agent_builder in agent_builders.items():
-            bandit = bandit_builder()
-            agent = agent_builder()
-            history = History(logging_period)
-            agent_state_log = AgentStateLogger(logging_period)
-            bandit_state_log = EnvironmentStateLogger(logging_period)
-            callbacks = [history, agent_state_log, bandit_state_log]
-            sim = SingleAgentWaitingSimulator(
-                bandit, agent, callbacks=callbacks
+
+    def loop_fn(
+        bandit_id: int,
+        bandit_builder: Callable[..., MultiArmedBandit],
+        agent_name: str,
+        agent_builder: Callable[..., Agent],
+        n_steps: int,
+        logging_period: int,
+        seed: int,
+    ) -> Dict[str, Any]:
+        rng = np.random.default_rng(seed)
+        bandit = bandit_builder(random_state=rng)
+        agent = agent_builder(random_state=rng)
+        history = History(logging_period)
+        agent_state_log = AgentStateLogger(logging_period)
+        bandit_state_log = EnvironmentStateLogger(logging_period)
+        callbacks = [history, agent_state_log, bandit_state_log]
+        sim = SingleAgentWaitingSimulator(bandit, agent, callbacks=callbacks)
+        sim.run(n_steps)
+        actions = np.array(history.actions)
+        action_value_matrix = np.stack(
+            [s["means"] for s in bandit_state_log.states]
+        )
+        optimal_action_values = np.max(action_value_matrix, axis=-1)
+        taken_action_values = np.squeeze(
+            np.take_along_axis(
+                action_value_matrix, actions[:, np.newaxis], axis=-1
             )
-            sim.run(n_steps)
-            actions = np.array(history.actions)
-            action_value_matrix = np.stack(
-                [s["means"] for s in bandit_state_log.states]
+        )
+        greedy_actions = np.array(
+            [np.argmax(s["Q"]) for s in agent_state_log.states]
+        )
+        greedy_action_values = np.squeeze(
+            np.take_along_axis(
+                action_value_matrix,
+                greedy_actions[:, np.newaxis],
+                axis=-1,
             )
-            optimal_action_values = np.max(action_value_matrix, axis=-1)
-            taken_action_values = np.squeeze(
-                np.take_along_axis(
-                    action_value_matrix, actions[:, np.newaxis], axis=-1
+        )
+        return {
+            "bandit_id": bandit_id,
+            "agent": agent_name,
+            "optimal_action_values": optimal_action_values,
+            "actions": actions,
+            "actions_taken_optimal": (
+                (taken_action_values == optimal_action_values).astype(
+                    np.float_
                 )
-            )
-            greedy_actions = np.array(
-                [np.argmax(s["Q"]) for s in agent_state_log.states]
-            )
-            greedy_action_values = np.squeeze(
-                np.take_along_axis(
-                    action_value_matrix,
-                    greedy_actions[:, np.newaxis],
-                    axis=-1,
+            ),
+            "greedy_actions": greedy_actions,
+            "greedy_actions_optimal": (
+                (greedy_action_values == optimal_action_values).astype(
+                    np.float_
                 )
-            )
-            results.append(
-                {
-                    "bandit_id": bandit_id,
-                    "agent": agent_name,
-                    "optimal_action_values": optimal_action_values,
-                    "actions": actions,
-                    "actions_taken_optimal": (
-                        (taken_action_values == optimal_action_values).astype(
-                            np.float_
-                        )
-                    ),
-                    "greedy_actions": greedy_actions,
-                    "greedy_actions_optimal": (
-                        (greedy_action_values == optimal_action_values).astype(
-                            np.float_
-                        )
-                    ),
-                    "rewards": np.array(history.rewards),
-                }
-            )
+            ),
+            "rewards": np.array(history.rewards),
+        }
+
+    seed_sq = np.random.SeedSequence(entropy).generate_state(
+        test_bed_size * len(agent_builders)
+    )
+    results = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(loop_fn)(
+            bandit_id,
+            bandit_builder,
+            agent_name,
+            agent_builder,
+            n_steps,
+            logging_period,
+            seed,
+        )
+        for seed, (bandit_id, (agent_name, agent_builder)) in zip(
+            seed_sq, product(range(test_bed_size), agent_builders.items())
+        )
+    )
     return BanditResults(results, logging_period=logging_period)
