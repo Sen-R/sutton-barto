@@ -153,10 +153,11 @@ def bandit_experiment(
     entropy: Optional[int] = None,
     n_jobs: Optional[int] = None,
     verbose: int = 0,
+    results_file: Optional[Union[str, os.PathLike]] = None,
 ) -> BanditResults:
     """Bandit learning curves experiment.
 
-    Calculates learning curves for the supplied agents
+    Calculates learning curves for the supplied agents.
 
     Args:
       agent_builders: a dict with agent names as keys and callables
@@ -165,7 +166,14 @@ def bandit_experiment(
         the specifications required for the current experiment
       test_bed_size: number of random bandits to generate
       n_steps: length of simulations
-      random_state: `None`, random seed or random number generator
+      logging_period: how frequently to log results
+      entropy: source of entropy to generate random seeds for agents and
+        environments
+      n_jobs: how many jobs to distribute simulations over (use -1 for
+        maximum)
+      verbose: verbosity of `joblib` progress meter
+      results_file: if set, the file to load results from (if it exists) or
+        cache results to (if it doesn't)
 
     Returns:
       `BanditResults` object containing results
@@ -228,6 +236,15 @@ def bandit_experiment(
             "rewards": np.array(history.rewards),
         }
 
+    if results_file:
+        try:
+            return BanditResults.load(results_file)
+        except FileNotFoundError:
+            print(
+                "results_file not found"
+                f"running experiment afresh: {results_file}"
+            )
+
     seed_sq = np.random.SeedSequence(entropy).generate_state(
         test_bed_size * len(agent_builders)
     )
@@ -245,4 +262,8 @@ def bandit_experiment(
             seed_sq, product(range(test_bed_size), agent_builders.items())
         )
     )
-    return BanditResults(results, logging_period=logging_period)
+    bandit_results = BanditResults(results, logging_period=logging_period)
+
+    if results_file:
+        bandit_results.save(results_file)
+    return bandit_results
