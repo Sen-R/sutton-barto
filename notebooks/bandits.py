@@ -241,7 +241,7 @@ def bandit_experiment(
             return BanditResults.load(results_file)
         except FileNotFoundError:
             print(
-                "results_file not found"
+                "results_file not found, "
                 f"running experiment afresh: {results_file}"
             )
 
