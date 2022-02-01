@@ -207,8 +207,15 @@ def bandit_experiment(
                 action_value_matrix, actions[:, np.newaxis], axis=-1
             )
         )
+
+        # This section records history of agents' preferences. The key
+        # name for extracting these is either "Q" or "H" depending on
+        # the policy type, but in either case we expect the state dict
+        # for all agents used by this code to consist of this single key
+        # TODO: to refactor this code to be more robust
+        agent_pref_key = "Q" if "Q" in agent.state.keys() else "H"
         greedy_actions = np.array(
-            [np.argmax(s["Q"]) for s in agent_state_log.states]
+            [np.argmax(s[agent_pref_key]) for s in agent_state_log.states]
         )
         greedy_action_values = np.squeeze(
             np.take_along_axis(
