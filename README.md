@@ -12,4 +12,5 @@ directory.
 ## Getting started
 
 To run the code in the notebooks, first install the `rl` package from
-[this repo](https://github.com/Sen-R/reinforcement-learning).
+[here](https://github.com/Sen-R/reinforcement-learning) and the `dp`
+package from [here](https://github.com/Sen-R/dynamic-programming).
